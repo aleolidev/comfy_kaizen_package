@@ -34,7 +34,7 @@ homepage = "https://github.com/aleolidev/kaizen_package"
 
 
 [tool.comfy]
-PublisherId = "aleolidev"
+PublisherId = "codekaizen"
 DisplayName = "Kaizen Package"
 Icon = ""
 
