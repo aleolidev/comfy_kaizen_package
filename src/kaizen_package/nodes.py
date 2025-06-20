@@ -1,118 +1,114 @@
-from inspect import cleandoc
-class Example:
-    """
-    A example node
+"""Kaizen Package - ComfyUI Custom Nodes for Image Processing."""
 
-    Class methods
-    -------------
-    INPUT_TYPES (dict):
-        Tell the main program input parameters of nodes.
-    IS_CHANGED:
-        optional method to control when the node is re executed.
+import torch
+import torch.nn.functional as F
 
-    Attributes
-    ----------
-    RETURN_TYPES (`tuple`):
-        The type of each element in the output tulple.
-    RETURN_NAMES (`tuple`):
-        Optional: The name of each output in the output tulple.
-    FUNCTION (`str`):
-        The name of the entry-point method. For example, if `FUNCTION = "execute"` then it will run Example().execute()
-    OUTPUT_NODE ([`bool`]):
-        If this node is an output node that outputs a result/image from the graph. The SaveImage node is an example.
-        The backend iterates on these output nodes and tries to execute all their parents if their parent graph is properly connected.
-        Assumed to be False if not present.
-    CATEGORY (`str`):
-        The category the node should appear in the UI.
-    execute(s) -> tuple || None:
-        The entry point method. The name of this method must be the same as the value of property `FUNCTION`.
-        For example, if `FUNCTION = "execute"` then this method's name must be `execute`, if `FUNCTION = "foo"` then it must be `foo`.
+
+class ImageComposite:
     """
-    def __init__(self):
-        pass
+    Composite images using mask-based alpha blending with precise positioning.
+
+    Overlays a source image onto a background at specified coordinates using a mask
+    to control transparency. Supports negative positioning and automatic size matching.
+    """
 
     @classmethod
-    def INPUT_TYPES(s):
-        """
-            Return a dictionary which contains config for all input fields.
-            Some types (string): "MODEL", "VAE", "CLIP", "CONDITIONING", "LATENT", "IMAGE", "INT", "STRING", "FLOAT".
-            Input types "INT", "STRING" or "FLOAT" are special values for fields on the node.
-            The type can be a list for selection.
-
-            Returns: `dict`:
-                - Key input_fields_group (`string`): Can be either required, hidden or optional. A node class must have property `required`
-                - Value input_fields (`dict`): Contains input fields config:
-                    * Key field_name (`string`): Name of a entry-point method's argument
-                    * Value field_config (`tuple`):
-                        + First value is a string indicate the type of field or a list for selection.
-                        + Secound value is a config for type "INT", "STRING" or "FLOAT".
-        """
+    def INPUT_TYPES(cls):
         return {
             "required": {
-                "image": ("Image", { "tooltip": "This is an image"}),
-                "int_field": ("INT", {
-                    "default": 0,
-                    "min": 0, #Minimum value
-                    "max": 4096, #Maximum value
-                    "step": 64, #Slider's step
-                    "display": "number" # Cosmetic only: display as "number" or "slider"
+                "background": ("IMAGE", {"tooltip": "Background image"}),
+                "foreground": ("IMAGE", {"tooltip": "Image to overlay"}),
+                "mask": ("MASK", {"tooltip": "Alpha mask (1.0=opaque, 0.0=transparent)"}),
+                "x": ("INT", {
+                    "default": 0, "min": -4096, "max": 4096, "step": 1,
+                    "tooltip": "Horizontal position (negative values supported)"
                 }),
-                "float_field": ("FLOAT", {
-                    "default": 1.0,
-                    "min": 0.0,
-                    "max": 10.0,
-                    "step": 0.01,
-                    "round": 0.001, #The value represeting the precision to round to, will be set to the step value by default. Can be set to False to disable rounding.
-                    "display": "number"}),
-                "print_to_screen": (["enable", "disable"],),
-                "string_field": ("STRING", {
-                    "multiline": False, #True if you want the field to look like the one on the ClipTextEncode node
-                    "default": "Hello World!"
+                "y": ("INT", {
+                    "default": 0, "min": -4096, "max": 4096, "step": 1,
+                    "tooltip": "Vertical position (negative values supported)"
                 }),
-            },
+            }
         }
 
     RETURN_TYPES = ("IMAGE",)
-    #RETURN_NAMES = ("image_output_name",)
-    DESCRIPTION = cleandoc(__doc__)
-    FUNCTION = "test"
+    RETURN_NAMES = ("composite",)
+    FUNCTION = "compose"
+    CATEGORY = "kaizen/image"
 
-    #OUTPUT_NODE = False
-    #OUTPUT_TOOLTIPS = ("",) # Tooltips for the output node
+    def compose(self, background, foreground, mask, x, y):
+        """Composite foreground onto background using mask-based alpha blending."""
+        # Extract first batch items
+        bg = background[0]
+        fg = foreground[0]
+        mask_tensor = mask[0]
 
-    CATEGORY = "Example"
+        # Normalize mask to [H, W, 3] format
+        mask_tensor = self._prepare_mask(mask_tensor, fg.shape[:2])
 
-    def test(self, image, string_field, int_field, float_field, print_to_screen):
-        if print_to_screen == "enable":
-            print(f"""Your input contains:
-                string_field aka input text: {string_field}
-                int_field: {int_field}
-                float_field: {float_field}
-            """)
-        #do some processing on the image, in this example I just invert it
-        image = 1.0 - image
-        return (image,)
+        # Apply mask to foreground
+        masked_fg = fg * mask_tensor
 
-    """
-        The node will always be re executed if any of the inputs change but
-        this method can be used to force the node to execute again even when the inputs don't change.
-        You can make this node return a number or a string. This value will be compared to the one returned the last time the node was
-        executed, if it is different the node will be executed again.
-        This method is used in the core repo for the LoadImage node where they return the image hash as a string, if the image hash
-        changes between executions the LoadImage node is executed again.
-    """
-    #@classmethod
-    #def IS_CHANGED(s, image, string_field, int_field, float_field, print_to_screen):
-    #    return ""
+        # Perform compositing
+        result = self._composite_images(bg, masked_fg, mask_tensor, x, y)
+
+        return (result.unsqueeze(0),)
+
+    def _prepare_mask(self, mask, target_size):
+        """Prepare mask to match foreground image dimensions."""
+        # Add channel dimension if needed
+        if len(mask.shape) == 2:
+            mask = mask.unsqueeze(-1)
+
+        # Expand to 3 channels
+        if mask.shape[-1] == 1:
+            mask = mask.repeat(1, 1, 3)
+
+        # Resize if dimensions don't match
+        if mask.shape[:2] != target_size:
+            mask = F.interpolate(
+                mask.permute(2, 0, 1).unsqueeze(0),
+                size=target_size,
+                mode='bilinear',
+                align_corners=False
+            ).squeeze(0).permute(1, 2, 0)
+
+        return mask
+
+    def _composite_images(self, background, masked_foreground, mask, x, y):
+        """Perform the actual image compositing with bounds checking."""
+        bg_h, bg_w = background.shape[:2]
+        fg_h, fg_w = masked_foreground.shape[:2]
+
+        result = background.clone()
+
+        # Calculate valid regions
+        start_x = max(0, x)
+        start_y = max(0, y)
+        end_x = min(bg_w, x + fg_w)
+        end_y = min(bg_h, y + fg_h)
+
+        src_start_x = max(0, -x)
+        src_start_y = max(0, -y)
+        src_end_x = src_start_x + (end_x - start_x)
+        src_end_y = src_start_y + (end_y - start_y)
+
+        # Composite if regions overlap
+        if start_x < end_x and start_y < end_y:
+            bg_region = result[start_y:end_y, start_x:end_x]
+            fg_region = masked_foreground[src_start_y:src_end_y, src_start_x:src_end_x]
+            mask_region = mask[src_start_y:src_end_y, src_start_x:src_end_x]
+
+            # Alpha blend: fg * alpha + bg * (1 - alpha)
+            result[start_y:end_y, start_x:end_x] = fg_region + bg_region * (1 - mask_region)
+
+        return result
 
 
-# A dictionary that contains all nodes you want to export with their names
-# NOTE: names should be globally unique
+# Node registration
 NODE_CLASS_MAPPINGS = {
-    "Example": Example
+    "KaizenImageComposite": ImageComposite,
 }
 
-# A dictionary that contains the friendly/humanly readable titles for the nodes
 NODE_DISPLAY_NAME_MAPPINGS = {
-    "Example": "Example Node"
+    "KaizenImageComposite": "Image Composite",
 }
