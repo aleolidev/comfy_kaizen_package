@@ -29,8 +29,8 @@ dev = [
 ]
 
 [project.urls]
-bugs = "https://github.com/aleolidev/kaizen_package/issues"
-homepage = "https://github.com/aleolidev/kaizen_package"
+bugs = "https://github.com/aleolidev/comfy_kaizen_package/issues"
+homepage = "https://github.com/aleolidev/comfy_kaizen_package"
 
 
 [tool.comfy]
